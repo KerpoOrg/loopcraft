@@ -1,0 +1,9 @@
+[package]
+name = "lc-sys"
+description = "Core Audio constants generated from the macOS SDK (see tools/gen_consts.c)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Embedded into the loopcraftd binary (see build.rs). macOS reads it to name
+     the daemon in privacy prompts and to keep its permissions. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>org.kerpo.loopcraft.daemon</string>
+	<key>CFBundleName</key>
+	<string>LoopCraft</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>LoopCraft routes the audio of the apps you list in its configuration.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>LoopCraft routes audio from the devices you list in its configuration.</string>
+</dict>
+</plist>

@@ -1,0 +1,4 @@
+/target
+/build
+*.dSYM
+.DS_Store

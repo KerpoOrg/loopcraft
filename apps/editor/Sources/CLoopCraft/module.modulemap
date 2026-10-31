@@ -1,0 +1,4 @@
+module CLoopCraft [system] {
+    header "../../../../crates/lc-ffi/include/lc_ffi.h"
+    export *
+}

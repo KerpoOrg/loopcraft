@@ -1,0 +1,25 @@
+# Rane FOUR: four-deck DJ controller with a built-in mixer. Channel names are
+# what the channels carry; Rane publishes no USB channel map, so this was
+# measured (2026-10-30): the device's own channel names, per-channel levels,
+# and moving the FX Assign buttons.
+device: Rane FOUR
+manufacturer: Rane
+inputs:            # from the Rane into the Mac
+  - {channels: [1, 2], name: Line 3, note: "Rear phono/line input of channel 3 (Rane: Deck 3)"}
+  - {channels: [3, 4], name: Line 4, note: "Rear phono/line input of channel 4 (Rane: Deck 4)"}
+  - {channels: [5, 6], name: Main, note: "The program mix: everything you hear from the Main outputs"}
+  - {channels: [7], name: Mic 1}
+  - {channels: [8], name: Mic 2}
+  - {channels: [9, 10], name: FX Send 1, note: "The deck on the left FX section (FX Assign: deck 1 or 3), for software effects"}
+  - {channels: [11, 12], name: FX Send 2, note: "The deck on the right FX section (FX Assign: deck 2 or 4), for software effects"}
+outputs:           # from the Mac to the Rane
+  - {channels: [1, 2], name: Deck 1}
+  - {channels: [3, 4], name: Deck 2}
+  - {channels: [5, 6], name: Deck 3}
+  - {channels: [7, 8], name: Deck 4}
+  - {channels: [9, 10], name: Sampler, note: "Into the program mix through the Rane's sampler level"}
+  - {channels: [11, 12], name: FX Return 1, note: "Back from software effects on FX Send 1"}
+  - {channels: [13, 14], name: FX Return 2, note: "Back from software effects on FX Send 2"}
+default:           # what is patched when the device is added
+  input: [5, 6]
+  output: [9, 10]

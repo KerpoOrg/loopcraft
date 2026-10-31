@@ -1,0 +1,64 @@
+# LoopCraft configuration. Saved changes are applied automatically.
+#
+# Location: ~/.config/loopcraft/config.yaml (override with LOOPCRAFT_CONFIG).
+#
+# Each device is a small mixer: inputs are wired onto busses, recording apps
+# receive the busses, and busses are wired to hardware outputs. (macOS sees it
+# from the other side: virtual inputs are the device's output channels and
+# busses its input channels.)
+#
+# Busses have names and ids; wires name a bus by either, and its side:
+# 'Music.left', 'Music.right'. 'to: Music' wires an input in stereo (left to
+# left, right to right) and 'from: Music' a bus to an output's first two
+# channels. The editor writes ids in (they never change, so renaming or
+# reordering busses keeps every patch). Device channels are numbered from 1.
+# Hardware devices are matched by exact UID, then exact name, then a part of
+# the name that only one device has.
+# Every input and output also accepts enabled: false, muted: true and
+# gain: in dB (0 = unity, the default; -inf = silent; at most +12).
+# An output with follow_volume: true also follows the device's own volume (the
+# macOS slider and volume keys); the others stay at their gain.
+#
+# Virtual devices of their own, on the mixer's clock (bit-exact, no added
+# delay), shown in macOS as "<mixer name>: <name>":
+#   inputs:
+#     - virtual: Comms         # playback-only: e.g. Discord plays into it
+#       channels: 2
+#       to: Comms
+#   outputs:
+#     - virtual: Daw Output    # record-only: e.g. a DAW records from it
+#       channels: 16
+#       wires: {Music.left: 1, Music.right: 2}    # bus side: device channel
+# Each gets a stable id from its name (or set 'id:'); apps remember it by that.
+devices:
+  - name: Desktop
+    id: desktop            # stable ID; apps remember the device by it. Don't change it later.
+    busses:                # what recording apps receive: a stereo bus each
+      - System             # 1/2
+      - Mic                # 3/4
+      - Rane               # 5/6
+      - Music              # 7/8
+      - Out                # 9/10
+    virtual_inputs: 2      # channels apps can play into this device (0 = record-only)
+    sample_rate: 48000
+    buffer_frames: 128     # routing IO buffer: each pass costs 2 buffers of delay
+
+    inputs:                # what is wired onto the busses
+      - virtual: true      # audio apps play into this device
+        to: System
+      - device: Rane FOUR              # hardware input, by name or UID
+        wires: {5: Rane.left, 6: Rane.right}   # device channel: bus side
+      - device: PRO X Wireless Gaming Headset
+        wires: {1: [Mic.left, Mic.right]}      # a mono mic onto both sides
+      - app: Spotify                   # an app by name or bundle ID
+        to: Music
+        mute_original: true            # leave it out of what it plays elsewhere
+
+    outputs:               # hardware outputs the busses are sent to
+      - device: Rane FOUR
+        wires: {Out.left: 13, Out.right: 14}   # bus side: hardware channel
+        gain: 0
+      - device: PRO X Wireless Gaming Headset
+        from: Music                    # Music to channels 1/2
+        gain: -3
+        follow_volume: true            # also follows the macOS volume (keys, headset wheel)

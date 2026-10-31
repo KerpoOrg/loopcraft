@@ -1,0 +1,9 @@
+[package]
+name = "lc-clock"
+description = "Host-time clock maths for LoopCraft devices"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]

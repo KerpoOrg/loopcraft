@@ -1,0 +1,17 @@
+[package]
+name = "loopcraft-cli"
+description = "Command-line control for LoopCraft devices"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "loopcraft"
+path = "src/main.rs"
+
+[dependencies]
+lc-sys = { path = "../lc-sys" }
+lc-ca = { path = "../lc-ca" }
+lc-spec = { path = "../lc-spec" }
+lc-config = { path = "../lc-config" }

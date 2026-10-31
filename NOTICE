@@ -1,0 +1,40 @@
+LoopCraft
+Copyright (C) 2026 Jouni Rajala
+
+LoopCraft is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option)
+any later version. See LICENSE.
+
+LoopCraft is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU General Public License for details.
+
+
+Additional terms (GNU GPL version 3, section 7)
+-----------------------------------------------
+
+These terms apply to LoopCraft and to every work that contains it or is
+based on it.
+
+1. Attribution (section 7b). Anything that installs or distributes LoopCraft,
+   or a work based on it, must show the user this notice, or one that says
+   the same, where the user will see it: in the installer and in the
+   About window or credits of the work, or, for a command-line tool, in its
+   --version output:
+
+       Includes LoopCraft, free software by Jouni Rajala, available at no
+       cost from https://github.com/KerpoOrg/loopcraft. Licensed under the
+       GNU GPL version 3.
+
+   A modified version says instead "Based on LoopCraft, free software by
+   Jouni Rajala, ...".
+
+2. Origin (section 7c). Nobody may misrepresent where LoopCraft comes from,
+   for instance by presenting it, or a work based on it, as their own work
+   or as a part of their product the user paid for. A modified version must
+   be marked as changed from the original and must not be called LoopCraft
+   (see TRADEMARKS.md).
+
+3. Names (section 7e). This license grants no rights to the name LoopCraft
+   or its logo. Their use is covered by TRADEMARKS.md.

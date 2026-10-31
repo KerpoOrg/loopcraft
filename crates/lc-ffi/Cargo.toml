@@ -1,0 +1,18 @@
+[package]
+name = "lc-ffi"
+description = "C interface to the LoopCraft core for the macOS editor"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+lc-config = { path = "../lc-config" }
+lc-ca = { path = "../lc-ca" }
+lc-meter = { path = "../lc-meter" }
+lc-sys = { path = "../lc-sys" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

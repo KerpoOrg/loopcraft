@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["crates/lc-sys", "crates/lc-spec", "crates/lc-ca", "crates/lc-config", "crates/lc-ring", "crates/lc-clock", "crates/loopcraft-hal", "crates/loopcraft-cli", "crates/loopcraftd", "crates/lc-ffi", "crates/lc-meter"]
+
+[workspace.package]
+version = "0.4.0"
+edition = "2021"
+publish = false
+license = "GPL-3.0-or-later"
+
+[profile.release]
+# Unwinding stays on so every plug-in entry point can catch a panic instead of
+# aborting coreaudiod.
+panic = "unwind"
+lto = true
+codegen-units = 1
+debug = 1

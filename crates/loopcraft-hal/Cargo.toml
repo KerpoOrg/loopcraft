@@ -1,0 +1,19 @@
+[package]
+name = "loopcraft-hal"
+description = "LoopCraft AudioServerPlugIn (virtual audio devices inside coreaudiod)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+lc-sys = { path = "../lc-sys" }
+lc-ring = { path = "../lc-ring" }
+lc-clock = { path = "../lc-clock" }
+lc-spec = { path = "../lc-spec" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+arc-swap = "1"

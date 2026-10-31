@@ -1,0 +1,10 @@
+[package]
+name = "lc-ca"
+description = "Minimal Core Audio HAL client used by the LoopCraft CLI and daemon"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+lc-sys = { path = "../lc-sys" }
