@@ -6,14 +6,13 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
-version="$(cargo metadata --format-version 1 --no-deps \
-  | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="loopcraft-hal"))')"
+version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 
 cargo build --release -p loopcraft-hal --target aarch64-apple-darwin
 
 bundle="build/LoopCraft.driver"
 rm -rf "$bundle"
-mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
+mkdir -p "$bundle/Contents/MacOS"
 sed "s/@VERSION@/$version/g" packaging/Info.plist > "$bundle/Contents/Info.plist"
 cp target/aarch64-apple-darwin/release/libloopcraft_hal.dylib "$bundle/Contents/MacOS/LoopCraft"
 # Neutral install name instead of the build machine's path.

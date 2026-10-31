@@ -14,6 +14,26 @@ Each device is a small mixer: **inputs** (virtual inputs that apps play into, ca
 - **Busses** are a list, one stereo bus each, with a name and an id: `- {id: b3f9a2c1d, name: Music}`. Wires name a bus by id (or, hand-written, by name) and side: `{5: Music.left, 6: Music.right}`; `to: Music` wires an input in stereo, `from: [Program, Music]` sends busses to an output's channels 1/2. Busses, inputs and outputs all get ids (`b…`, `i…`, `o…`) that never change, so renaming, reordering, inserting or removing a bus keeps every patch; only hardware channels are numbers. The ids are resolved to channel numbers when the file is read, so the daemon and plug-in work as before. A bus can be mono (`{id: …, name: Mic, mono: true}`, one channel, wired by its id alone: `{1: Mic}`; a stereo unit's `to:` sums both sides into it). Bus groups (`groups: [{id: g…, name: DAW}]`, and `group: DAW` on a bus) are shown by the editor as units of their own; they don't change any channel. Two more editor-only keys on inputs and outputs: `mono: [1, 2]` shows those channels as a jack and meter each instead of a stereo pair (the wires are unchanged), and `half: true` shows a stereo or mono unit half-width, two to a row. Older files (`busses: 10`, bus numbers in wires) are still read; the editor's first save converts them and keeps the old file as `config.yaml.bak-before-ids`.
 - **Device gain** (the macOS volume slider and keys while the device is the system output) is in dB on a console fader law: unity at 75 %, +12 dB at the top, −∞ at the bottom. `loopcraft gain virtual -6`.
 
+## Install with Homebrew
+
+Needs a Mac with Apple silicon, macOS 15 or later and [Homebrew](https://brew.sh). Homebrew builds LoopCraft from source on your Mac (a few minutes), then `loopcraft setup` installs the parts Homebrew can't:
+
+```sh
+brew install KerpoOrg/loopcraft/loopcraft
+loopcraft setup
+open ~/Applications/LoopCraft.app
+```
+
+`loopcraft setup` explains each step and asks before changing anything. Installing the audio plug-in needs your password and **restarts macOS's audio service (coreaudiod), so all sound stops for a few seconds**. `loopcraft setup --status` shows what is installed.
+
+Updating: `brew upgrade loopcraft`, then `loopcraft setup` again (it only restarts coreaudiod when the plug-in changed).
+
+Removing: `loopcraft setup --uninstall` (keeps your configuration), then `brew uninstall loopcraft`.
+
+### Why isn't LoopCraft signed by Apple?
+
+Apple only vouches for apps from developers in its paid Developer Program, which this free project isn't part of yet. Instead, Homebrew compiles LoopCraft on your own Mac, so macOS runs it without warnings. In place of Apple's check you get: all the code is public, you build it yourself, and LoopCraft never goes online (`scripts/check-offline.sh` checks the built binaries). macOS asks for microphone permission when LoopCraft first uses an input, and may ask again after an upgrade, because it ties the permission to each build when the developer isn't verified by Apple.
+
 ## Layout
 
 | Path | What |
@@ -52,7 +72,7 @@ Regenerate the SDK constants after an SDK update:
 clang -o build/gen_consts tools/gen_consts.c && build/gen_consts > crates/loopcraft-hal/src/consts.rs
 ```
 
-## Install / uninstall
+## Install from a checkout (development)
 
 Both scripts ask first, need `sudo`, and **restart coreaudiod, which interrupts all audio briefly**.
 

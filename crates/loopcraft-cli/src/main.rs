@@ -1,6 +1,7 @@
 //! `loopcraft`: command-line control for LoopCraft devices.
 
 mod config_cmd;
+mod setup;
 
 use lc_ca as ca;
 
@@ -28,6 +29,9 @@ USAGE:
   loopcraft config                         Show where the configuration file is
   loopcraft config init [PATH]             Create it from the current LoopCraft devices
   loopcraft config check [PATH]            Validate it and look up its hardware devices
+  loopcraft setup [--yes]                  Install the audio plug-in, the daemon and the editor
+  loopcraft setup --status                 Show what is installed
+  loopcraft setup --uninstall [--yes]      Remove them again (the configuration is kept)
   loopcraft help                           Show this help
 
 \"virtual\" is what apps play into the device (also: out), \"busses\" what
@@ -99,11 +103,25 @@ fn run(args: &[String]) -> Result<()> {
         ["config", "init", path] => config_cmd::init(Some(path)),
         ["config", "check"] => config_cmd::check(None),
         ["config", "check", path] => config_cmd::check(Some(path)),
+        ["setup", flags @ ..] => setup_cmd(flags),
         ["debug", "devices"] => debug_devices(None),
         ["debug", "devices", json] => debug_devices(Some(json)),
         ["level", secs] => level(secs.parse::<f64>().ok().filter(|s| *s > 0.0 && *s <= 3600.0).ok_or_else(|| usage(format!("bad duration '{secs}'")))?),
         [cmd, ..] => Err(usage(format!("unknown or incomplete command '{cmd}'"))),
     }
+}
+
+fn setup_cmd(flags: &[&str]) -> Result<()> {
+    let (mut mode, mut yes) = (setup::Mode::Install, false);
+    for f in flags {
+        match *f {
+            "--yes" | "-y" => yes = true,
+            "--uninstall" => mode = setup::Mode::Uninstall,
+            "--status" => mode = setup::Mode::Status,
+            _ => return Err(usage(format!("unknown setup option '{f}'"))),
+        }
+    }
+    setup::run(mode, yes)
 }
 
 // ---------------------------------------------------------------- parsing

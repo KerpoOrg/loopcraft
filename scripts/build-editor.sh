@@ -9,10 +9,12 @@ version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -1)"
 
 cd "$root"
 cargo build --release -p lc-ffi
-swift build -c release --package-path apps/editor
+# SWIFT_BUILD_FLAGS: e.g. --disable-sandbox inside another sandbox (Homebrew's).
+# shellcheck disable=SC2086
+swift build -c release --package-path apps/editor ${SWIFT_BUILD_FLAGS:-}
 
 rm -rf "$app"
-mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+mkdir -p "$app/Contents/MacOS"
 cp "apps/editor/.build/release/LoopCraft" "$app/Contents/MacOS/LoopCraft"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
