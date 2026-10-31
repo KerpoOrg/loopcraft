@@ -93,18 +93,18 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "lc-ca"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "lc-sys",
 ]
 
 [[package]]
 name = "lc-clock"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "lc-config"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "lc-spec",
  "serde",
@@ -113,7 +113,7 @@ dependencies = [
 
 [[package]]
 name = "lc-ffi"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "lc-ca",
  "lc-config",
@@ -125,15 +125,15 @@ dependencies = [
 
 [[package]]
 name = "lc-meter"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "lc-ring"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "lc-spec"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -141,11 +141,11 @@ dependencies = [
 
 [[package]]
 name = "lc-sys"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "loopcraft-cli"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "lc-ca",
  "lc-config",
@@ -155,7 +155,7 @@ dependencies = [
 
 [[package]]
 name = "loopcraft-hal"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "arc-swap",
  "lc-clock",
@@ -168,7 +168,7 @@ dependencies = [
 
 [[package]]
 name = "loopcraftd"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "arc-swap",
  "lc-ca",

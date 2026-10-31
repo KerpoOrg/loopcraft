@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/lc-sys", "crates/lc-spec", "crates/lc-ca", "crates/lc-config", "crates/lc-ring", "crates/lc-clock", "crates/loopcraft-hal", "crates/loopcraft-cli", "crates/loopcraftd", "crates/lc-ffi", "crates/lc-meter"]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 publish = false
 license = "GPL-3.0-or-later"

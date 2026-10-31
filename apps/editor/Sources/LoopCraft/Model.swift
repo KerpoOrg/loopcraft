@@ -991,6 +991,17 @@ extension RackModel {
             if n != d.name { edit { $0.name = n } }
             return
         }
+        if key.hasPrefix("group:") {
+            let id = String(key.dropFirst("group:".count))
+            guard let g = d.groups.firstIndex(where: { $0.id == id }), d.groups[g].name != n else { return }
+            if d.groups.contains(where: { $0.id != id && $0.name.lowercased() == n.lowercased() }) {
+                warning = "Another group is already called “\(n)”."
+                return
+            }
+            warning = nil
+            edit { $0.groups[g].name = n }
+            return
+        }
         let parts = key.split(separator: ":")
         guard parts.count == 2, let i = Int(parts[1]) else { return }
         let input = parts[0] == "in"

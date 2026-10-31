@@ -2,7 +2,7 @@
 
 A free, open-source and fully offline virtual audio router and mixer for macOS (Apple Silicon, macOS 14.3+), written in Rust.
 
-**Status: early test release (0.4.0).** Devices are defined in `~/.config/loopcraft/config.yaml`; `loopcraftd` applies saved changes within about a second, without restarting coreaudiod.
+**Status: early test release (0.4.1).** Devices are defined in `~/.config/loopcraft/config.yaml`; `loopcraftd` applies saved changes within about a second, without restarting coreaudiod.
 
 Each device is a small mixer: **inputs** (virtual inputs that apps play into, captured apps, hardware inputs) are wired onto **busses**, which recording apps receive, and busses are wired to hardware **outputs**. macOS sees it from the other side: virtual inputs are the device's output channels, busses its input channels.
 
