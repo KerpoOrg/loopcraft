@@ -44,6 +44,10 @@ const HEADER: &str = "\
 #                       from: [Program, Music]   # each to channels 1/2
 #                       gain: -3              # dB
 #                       follow_volume: true   # also follows the macOS volume (keys, wheel)
+#                     - device: Rane FOUR
+#                       wires: {mix.left: 3, mix.right: 4}   # every bus summed (the MIX)
+#                   A group's MIX is <group>.mix.left; with mix_mono: true (on the
+#                   device, or a group) a MIX is one channel: wires: {mix: 3}
 #   Virtual devices of their own (\"<mixer name>: <name>\" in macOS, on the
 #   mixer's clock):
 #                     inputs:  - virtual: Comms       # playback-only (e.g. Discord)
@@ -176,8 +180,18 @@ pub fn check(path: Option<&str>) -> Result<()> {
                     }
                 }
             }));
-        for (label, hw, wires, enabled) in lines {
-            let pairs: Vec<String> = wires.iter().map(|w| format!("{}→{}", w.from, w.to)).collect();
+        let mixes: Vec<Vec<String>> = d.inputs.iter().map(|_| vec![]).chain(d.outputs.iter().map(|o| {
+            o.mix_wires
+                .iter()
+                .map(|w| {
+                    let name = w.group.as_ref().and_then(|g| d.groups.iter().find(|x| &x.id == g)).map_or("MIX".to_string(), |g| format!("{} MIX", g.name));
+                    let side = if d.mix_is_mono(w.group.as_deref()) { "" } else if w.from == 2 { ".R" } else { ".L" };
+                    format!("{name}{side}→{}", w.to)
+                })
+                .collect()
+        })).collect();
+        for ((label, hw, wires, enabled), mix) in lines.zip(mixes) {
+            let pairs: Vec<String> = wires.iter().map(|w| format!("{}→{}", w.from, w.to)).chain(mix).collect();
             let mut line = format!("    {label}: {}{}", pairs.join(" "), if enabled { "" } else { "  [disabled]" });
             if let Some((query, list, dir)) = hw {
                 let own = d.uid();

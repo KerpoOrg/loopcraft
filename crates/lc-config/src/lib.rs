@@ -78,6 +78,10 @@ pub struct Device {
     pub bus_list: Vec<Bus>,
     /// Named groups the editor shows busses in, each as a unit of its own.
     pub groups: Vec<BusGroup>,
+    /// The mixer's MIX (every bus summed) is one channel instead of two.
+    pub mix_mono: bool,
+    /// Where the editor shows the mixer in the rack; `None`: after the inputs.
+    pub mixer_rack: Option<RackSpot>,
     /// Channels apps can play into the device; 0 makes it record-only.
     pub virtual_inputs: u32,
     pub sample_rate: u32,
@@ -103,6 +107,45 @@ impl Device {
     pub fn bus_of(&self, channel: u32) -> Option<usize> {
         bus_of(&self.bus_list, channel)
     }
+
+    /// Whether a MIX (the mixer's, `group` `None`, or a group's) is mono.
+    pub fn mix_is_mono(&self, group: Option<&str>) -> bool {
+        match group {
+            None => self.mix_mono,
+            Some(g) => self.groups.iter().any(|x| x.id == g && x.mix_mono),
+        }
+    }
+
+    /// What one channel of a MIX (`side` 1, or 2 for the right of a stereo
+    /// mix) sums: bus channels with their gains. The mixer's MIX has every
+    /// bus, a group's the busses in it. In stereo a mono bus goes to both
+    /// sides at -3 dB; a mono MIX takes both sides of a stereo bus at -6 dB.
+    pub fn mix_sources(&self, group: Option<&str>, side: u32) -> Vec<(u32, f64)> {
+        let mono = self.mix_is_mono(group);
+        let mut out = Vec::new();
+        for (k, b) in self.bus_list.iter().enumerate() {
+            if group.is_some() && b.group.as_deref() != group {
+                continue;
+            }
+            let (l, r) = self.bus_channels(k);
+            match (r, mono) {
+                (Some(r), true) => out.extend([(l, 0.5), (r, 0.5)]),
+                (Some(r), false) => out.push((if side == 2 { r } else { l }, 1.0)),
+                (None, true) => out.push((l, 1.0)),
+                (None, false) => out.push((l, std::f64::consts::FRAC_1_SQRT_2)),
+            }
+        }
+        out
+    }
+}
+
+/// Where the editor shows a unit: its rack unit (1 = the first below the
+/// preset unit; the mixer and bus groups take two) and, for a half-width
+/// unit, which half.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RackSpot {
+    pub u: u32,
+    pub right: bool,
 }
 
 /// Channels of `list[k]`, counting the busses before it.
@@ -145,6 +188,9 @@ impl Bus {
 pub struct BusGroup {
     pub id: String,
     pub name: String,
+    /// Its MIX (the group's busses summed) is one channel instead of two.
+    pub mix_mono: bool,
+    pub rack: Option<RackSpot>,
 }
 
 /// A device of the mixer's own, on its clock: playback-only as an input
@@ -191,6 +237,7 @@ pub struct Input {
     /// channel instead of a stereo pair, and a half-width unit.
     pub mono: Vec<u32>,
     pub half: bool,
+    pub rack: Option<RackSpot>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -209,6 +256,8 @@ pub struct Output {
     pub kind: OutputKind,
     /// Bus → output channel.
     pub wires: Vec<Wire>,
+    /// A MIX → output channel.
+    pub mix_wires: Vec<MixWire>,
     pub enabled: bool,
     /// Gain in dB: 0 = unity, `-inf` = silent, at most +12.
     pub gain_db: f64,
@@ -218,9 +267,10 @@ pub struct Output {
     /// outputs without a volume knob of their own. Once any output follows,
     /// the device's volume no longer scales what apps play in.
     pub follow_volume: bool,
-    /// As for inputs: mono channels and a half-width unit, in the editor.
+    /// As for inputs: mono channels, a half-width unit and its place, in the editor.
     pub mono: Vec<u32>,
     pub half: bool,
+    pub rack: Option<RackSpot>,
 }
 
 impl Device {
@@ -248,6 +298,15 @@ impl Device {
 /// One channel connection; channels are numbered from 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Wire {
+    pub from: u32,
+    pub to: u32,
+}
+
+/// A channel of a MIX to an output channel: `from` is 1, or 2 for the
+/// right of a stereo mix; `group` `None` is the mixer's MIX.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MixWire {
+    pub group: Option<String>,
     pub from: u32,
     pub to: u32,
 }

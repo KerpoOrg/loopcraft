@@ -7,7 +7,7 @@ use serde::de::{self, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::Deserialize;
 
 use crate::ids::derived_id;
-use crate::{bus_channels, Bus, BusGroup, Device, Input, InputKind, Output, OutputKind, VirtualDevice, Wire, MAX_VIRTUALS, MAX_BUFFER_FRAMES, MAX_CHANNELS, MAX_DEVICES, MAX_GAIN_DB, MIN_BUFFER_FRAMES, SAMPLE_RATES};
+use crate::{bus_channels, Bus, BusGroup, Device, Input, InputKind, MixWire, Output, OutputKind, RackSpot, VirtualDevice, Wire, MAX_VIRTUALS, MAX_BUFFER_FRAMES, MAX_CHANNELS, MAX_DEVICES, MAX_GAIN_DB, MIN_BUFFER_FRAMES, SAMPLE_RATES};
 
 fn two() -> u32 {
     2
@@ -80,6 +80,9 @@ struct RawDevice {
     busses: RawBusses,
     #[serde(default)]
     groups: Vec<RawGroup>,
+    #[serde(default)]
+    mix_mono: bool,
+    mixer_rack: Option<RawSpot>,
     #[serde(default = "two")]
     virtual_inputs: u32,
     #[serde(default = "default_rate")]
@@ -101,6 +104,59 @@ struct RawDevice {
 struct RawGroup {
     id: Option<String>,
     name: String,
+    #[serde(default)]
+    mix_mono: bool,
+    rack: Option<RawSpot>,
+}
+
+/// `rack: 5` (the rack unit, from 1 below the preset unit), or `5L` / `5R`
+/// for the left or right half of it.
+#[derive(Debug)]
+struct RawSpot(String);
+
+impl<'de> Deserialize<'de> for RawSpot {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl Visitor<'_> for V {
+            type Value = RawSpot;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a rack unit: a number, or a number and L or R for a half")
+            }
+            fn visit_u64<E: de::Error>(self, v: u64) -> Result<RawSpot, E> {
+                Ok(RawSpot(v.to_string()))
+            }
+            fn visit_i64<E: de::Error>(self, v: i64) -> Result<RawSpot, E> {
+                Ok(RawSpot(v.to_string()))
+            }
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<RawSpot, E> {
+                Ok(RawSpot(v.to_string()))
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+/// A rack spot as written; `half`: the unit is half-width, so it may name a half.
+fn rack_spot(raw: Option<RawSpot>, half: bool, at: &str, problems: &mut Vec<String>) -> Option<RackSpot> {
+    let raw = raw?;
+    let t = raw.0.trim();
+    let (digits, right) = match t.char_indices().last() {
+        Some((i, 'R' | 'r')) => (&t[..i], Some(true)),
+        Some((i, 'L' | 'l')) => (&t[..i], Some(false)),
+        _ => (t, None),
+    };
+    match digits.trim().parse::<u32>() {
+        Ok(u) if u >= 1 => {}
+        _ => {
+            problems.push(format!("{at}: rack: '{t}' is not a rack unit (1, 2, …, or 5L / 5R for a half)"));
+            return None;
+        }
+    }
+    if right.is_some() && !half {
+        problems.push(format!("{at}: rack: '{t}' names a half, but the unit is full width"));
+        return None;
+    }
+    Some(RackSpot { u: digits.trim().parse().unwrap_or(1), right: right.unwrap_or(false) })
 }
 
 /// `busses: 10` (numbered), or a list, one bus each: names (`[Program,
@@ -240,6 +296,7 @@ struct RawInput {
     mono: Vec<u32>,
     #[serde(default)]
     half: bool,
+    rack: Option<RawSpot>,
     pass_thru: Renamed,
     input: Renamed,
 }
@@ -271,6 +328,7 @@ struct RawOutput {
     mono: Vec<u32>,
     #[serde(default)]
     half: bool,
+    rack: Option<RawSpot>,
     output: Renamed,
 }
 
@@ -422,6 +480,37 @@ impl BusRefs<'_> {
 
     fn left(&self, k: usize) -> u32 {
         bus_channels(self.list, k).0
+    }
+
+    /// A MIX as a wire's source: `mix.left` / `mix.right` (or `mix` when
+    /// it is mono), a group's as `<group>.mix.left`; the group by id or
+    /// name. `None`: the text doesn't name a MIX at all.
+    fn mix(&self, t: &str, groups: &[BusGroup], mixer_mono: bool) -> Option<Result<(Option<String>, u32), String>> {
+        let t = t.trim();
+        let lower = t.to_ascii_lowercase();
+        let (head, side) = match lower.rsplit_once('.') {
+            Some((h, "left" | "l")) => (&t[..h.len()], Some(1)),
+            Some((h, "right" | "r")) => (&t[..h.len()], Some(2)),
+            _ => (t, None),
+        };
+        let group = if head.eq_ignore_ascii_case("mix") {
+            None
+        } else {
+            let g = head.len().checked_sub(4).filter(|&i| head.is_char_boundary(i) && head[i..].eq_ignore_ascii_case(".mix"))?;
+            let r = head[..g].trim();
+            match groups.iter().find(|x| x.id == r).or_else(|| groups.iter().find(|x| x.name.eq_ignore_ascii_case(r))) {
+                Some(x) => Some(x),
+                None => return Some(Err(format!("there is no bus group '{r}' for '{t}'"))),
+            }
+        };
+        let mono = group.map_or(mixer_mono, |g| g.mix_mono);
+        let what = group.map_or("the mixer's MIX".to_string(), |g| format!("the MIX of '{}'", g.name));
+        Some(match (side, mono) {
+            (None, true) => Ok((group.map(|g| g.id.clone()), 1)),
+            (Some(s), false) => Ok((group.map(|g| g.id.clone()), s)),
+            (None, false) => Err(format!("'{t}': {what} is stereo; say '{head}.left' or '{head}.right'")),
+            (Some(_), true) => Err(format!("'{t}': {what} is mono; wire from '{head}' itself")),
+        })
     }
 
     fn right(&self, k: usize) -> Option<u32> {
@@ -591,6 +680,56 @@ fn wires(
     out
 }
 
+/// Wires from a MIX to output channels, checked like [`wires`].
+fn mix_wires(
+    raw: Vec<(End, Vec<End>)>,
+    refs: &BusRefs,
+    groups: &[BusGroup],
+    mixer_mono: bool,
+    to_max: Option<u32>,
+    at: &str,
+    problems: &mut Vec<String>,
+) -> Vec<MixWire> {
+    let mut out: Vec<MixWire> = Vec::new();
+    for (f, targets) in raw {
+        let End::Text(t) = &f else { continue };
+        let (group, from) = match refs.mix(t, groups, mixer_mono) {
+            Some(Ok(m)) => m,
+            Some(Err(e)) => {
+                problems.push(format!("{at}: wires: {e}"));
+                continue;
+            }
+            None => continue,
+        };
+        if out.iter().any(|w| w.group == group && w.from == from) {
+            problems.push(format!("{at}: wires: '{}' is listed twice", t.trim()));
+            continue;
+        }
+        if targets.is_empty() {
+            problems.push(format!("{at}: wires: '{}' has an empty list", t.trim()));
+        }
+        for e in &targets {
+            match device_channel(e) {
+                Ok(0) => problems.push(format!("{at}: wires: channels are numbered from 1, not 0")),
+                Ok(c) if to_max.is_some_and(|m| c > m) => {
+                    problems.push(format!("{at}: wires: device channel {c} does not exist (it has {})", to_max.unwrap_or(0)));
+                }
+                Ok(to) => {
+                    let w = MixWire { group: group.clone(), from, to };
+                    if out.contains(&w) {
+                        problems.push(format!("{at}: wires: '{}' → {to} is listed twice", t.trim()));
+                    } else {
+                        out.push(w);
+                    }
+                }
+                Err(e) => problems.push(format!("{at}: wires: {e}")),
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 /// `mono: [1, 2]`: real channels, sorted, each once.
 fn mono_channels(mut list: Vec<u32>, max: Option<u32>, at: &str, problems: &mut Vec<String>) -> Vec<u32> {
     list.sort_unstable();
@@ -717,7 +856,8 @@ pub(crate) fn validate(raw: Config) -> Result<crate::Config, Vec<String>> {
             }
             let id = g.id.map(|i| i.trim().to_string()).unwrap_or_else(|| derived_id('g', &format!("{}/group/{k}", d.id)));
             claim(&id, &format!("bus group '{name}'"), &mut problems);
-            groups.push(BusGroup { id, name });
+            let rack = rack_spot(g.rack, false, &format!("{at}: bus group '{name}'"), &mut problems);
+            groups.push(BusGroup { id, name, mix_mono: g.mix_mono, rack });
         }
         // `busses: 10` is 10 channels (a last odd one a mono bus); a list is a bus each.
         let listed = matches!(d.busses, RawBusses::List(_));
@@ -738,8 +878,13 @@ pub(crate) fn validate(raw: Config) -> Result<crate::Config, Vec<String>> {
                 problems.push(format!("{at}: {place} needs a name"));
             } else if !name.is_empty() && !seen_names.insert(name.to_lowercase()) {
                 problems.push(format!("{at}: two busses are called '{name}'"));
+            } else if name.eq_ignore_ascii_case("mix") {
+                problems.push(format!("{at}: {place}: 'mix' is what wires call the mixer's MIX; give the bus another name"));
             }
             let id = b.id.map(|i| i.trim().to_string()).unwrap_or_else(|| derived_id('b', &format!("{}/bus/{k}", d.id)));
+            if id.eq_ignore_ascii_case("mix") {
+                problems.push(format!("{at}: {place}: 'mix' is what wires call the mixer's MIX; give the bus another id"));
+            }
             claim(&id, &place, &mut problems);
             let group = b.group.and_then(|r| {
                 let r = r.trim();
@@ -847,7 +992,8 @@ pub(crate) fn validate(raw: Config) -> Result<crate::Config, Vec<String>> {
             let raw = resolve(s.wires, device_channel, |e| refs.channel(e), shorthand, &at, &mut problems);
             let wires = wires(raw, from_max, "input", Some(busses), "bus", &at, &mut problems);
             let mono = mono_channels(s.mono, from_max, &at, &mut problems);
-            inputs.push(Input { id, kind, wires, enabled: s.enabled, gain_db: gain(s.gain, &at, &mut problems), muted: s.muted, mono, half: s.half });
+            let rack = rack_spot(s.rack, s.half, &at, &mut problems);
+            inputs.push(Input { id, kind, wires, enabled: s.enabled, gain_db: gain(s.gain, &at, &mut problems), muted: s.muted, mono, half: s.half, rack });
         }
 
         let mut outputs = Vec::new();
@@ -896,19 +1042,28 @@ pub(crate) fn validate(raw: Config) -> Result<crate::Config, Vec<String>> {
             };
             claim(&id, &format!("output {}", j + 1), &mut problems);
             let shorthand = from_pairs(&refs, &o.from.0, shorthand_channels(None, Some(&kind), d.virtual_inputs), &at, &mut problems);
-            let raw = resolve(o.wires, |e| refs.channel(e), device_channel, shorthand, &at, &mut problems);
+            // Wires from a MIX: what doesn't name a bus but does name a MIX.
+            let (mix_raw, bus_raw): (Vec<_>, Vec<_>) = o.wires.0.into_iter().partition(|(f, _)| match f {
+                End::Text(t) => refs.channel(f).is_err() && refs.mix(t, &groups, d.mix_mono).is_some(),
+                End::Number(_) => false,
+            });
+            let mix_wires = mix_wires(mix_raw, &refs, &groups, d.mix_mono, to_max, &at, &mut problems);
+            let raw = resolve(Wires(bus_raw), |e| refs.channel(e), device_channel, shorthand, &at, &mut problems);
             let wires = wires(raw, Some(busses), "bus", to_max, "device", &at, &mut problems);
             let mono = mono_channels(o.mono, to_max, &at, &mut problems);
+            let rack = rack_spot(o.rack, o.half, &at, &mut problems);
             outputs.push(Output {
                 id,
                 kind,
                 wires,
+                mix_wires,
                 enabled: o.enabled,
                 gain_db: gain(o.gain, &at, &mut problems),
                 muted: o.muted,
                 follow_volume: o.follow_volume,
                 mono,
                 half: o.half,
+                rack,
             });
         }
 
@@ -920,7 +1075,9 @@ pub(crate) fn validate(raw: Config) -> Result<crate::Config, Vec<String>> {
             id: d.id,
             busses,
             bus_list,
+            mixer_rack: rack_spot(d.mixer_rack, false, &format!("{at}: mixer_rack"), &mut problems),
             groups,
+            mix_mono: d.mix_mono,
             virtual_inputs: d.virtual_inputs,
             sample_rate: d.sample_rate,
             buffer_frames: d.buffer_frames,

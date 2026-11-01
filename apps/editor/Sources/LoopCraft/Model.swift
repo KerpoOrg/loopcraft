@@ -142,7 +142,8 @@ final class RackModel: ObservableObject {
 
 // MARK: - The rack, derived from the device
 
-enum Side { case source, busIn, busOut, output }
+/// `mixOut`: a MIX, its `unit` 0 for the mixer's, 1 + the group's index.
+enum Side { case source, busIn, busOut, mixOut, output }
 
 /// A jack: a stereo pair or a single channel of a unit, or of a bus.
 struct JackID: Hashable {
@@ -161,6 +162,8 @@ enum PairSwitch: Hashable {
     case unit(side: Side, unit: Int, ch: UInt32)
     /// A bus slot: a stereo bus, two mono busses side by side, or a lone mono bus.
     case bus(first: Int)
+    /// A MIX: the mixer's (nil) or a group's.
+    case mix(group: String?)
 }
 
 enum Half { case left, right }
@@ -171,23 +174,21 @@ struct Spot {
     var half: Half?
 }
 
-/// Where the units sit: the preset unit on top, then the inputs shown (all,
-/// or only the patched ones), the mixer and the bus groups, the outputs
-/// shown. Two half-width units side by side share a row.
+/// Where the units sit (see Placement.swift): the preset unit on top, the
+/// rest each in its rack unit.
 struct RackLayout {
-    /// Config indices of the units shown, in order.
+    /// Config indices of the units shown, top to bottom.
     var inputs: [Int]
     var outputs: [Int]
     /// Units left out because nothing is patched to them.
     var hidden: Int
+    var spots: [UnitRef: Placed] = [:]
     var inputSpots: [Int: Spot] = [:]
     var outputSpots: [Int: Spot] = [:]
     /// The mixer (group nil), then each bus group.
     var busUnits: [(group: String?, top: CGFloat)] = []
     /// Half rows with nothing in them, closed with a blank plate.
     var blanks: [Spot] = []
-    /// Every unit row, for the rail holes.
-    var rows: [(top: CGFloat, height: CGFloat)] = []
     var height: CGFloat = 0
 
     var presetTop: CGFloat { Rack.topPad }
@@ -197,14 +198,14 @@ struct RackLayout {
     func outputTop(_ i: Int) -> CGFloat { outputSpots[i]?.top ?? 0 }
     func busUnitTop(_ group: String?) -> CGFloat { busUnits.first { $0.group == group }?.top ?? busUnits.first?.top ?? 0 }
 
-    /// Heights of the rail holes: behind each unit's screws, then the same
-    /// pattern on down the empty part of the rack.
+    /// Heights of the rail holes: two in every rack unit, behind a unit's
+    /// screws where one is mounted.
     var screwRows: [CGFloat] {
-        var holes = rows.flatMap { [$0.top + Rack.screwInset, $0.top + $0.height - Rack.screwInset] }
-        var top = (rows.last.map { $0.top + $0.height } ?? 0) + 2
-        while top < height {
-            holes += [top + Rack.screwInset, top + Rack.unitHeight - Rack.screwInset].filter { $0 < height - 6 }
-            top += Rack.pitch
+        var holes: [CGFloat] = []
+        var u = 0
+        while Rack.top(u) < height {
+            holes += [Rack.top(u) + Rack.screwInset, Rack.top(u) + Rack.unitHeight - Rack.screwInset].filter { $0 < height - 6 }
+            u += 1
         }
         return holes
     }
@@ -222,9 +223,16 @@ enum Rack {
     static let unitWidth: CGFloat = 1160
     static let halfWidth: CGFloat = 580
     static let unitHeight: CGFloat = 84
-    static let mixerHeight: CGFloat = 210
     static let pitch: CGFloat = 86
     static let topPad: CGFloat = 24
+    /// The mixer and the bus groups take two rack units.
+    static let mixerUnits = 2
+    static let mixerHeight: CGFloat = unitHeight + pitch * CGFloat(mixerUnits - 1)
+
+    /// The top of rack unit `u` (0: the preset unit's).
+    static func top(_ u: Int) -> CGFloat { topPad + CGFloat(u) * pitch }
+    /// How tall a unit `units` rack units high is.
+    static func height(_ units: Int) -> CGFloat { unitHeight + pitch * CGFloat(units - 1) }
 
     /// The ears: screws sit `screwInset` in from a unit's edges, over the
     /// rails, which reach `railOverhang` past the units.
@@ -239,6 +247,7 @@ enum Rack {
     static let sourceX: CGFloat = 340
     static let busInX: CGFloat = 440
     static let busOutX: CGFloat = 860
+    static let mixX: CGFloat = 1226
 }
 
 /// The jacks of a unit with `n` channels: stereo pairs, or one per channel
@@ -316,6 +325,28 @@ extension EDevice {
         let s = busSpans[k]
         return JackID(side: side, unit: k, ch: s.first, width: s.width)
     }
+
+    /// The MIX a mix jack's `unit` stands for: nil for the mixer's.
+    func mixGroup(_ unit: Int) -> String? {
+        unit > 0 && groups.indices.contains(unit - 1) ? groups[unit - 1].id : nil
+    }
+
+    func mixUnit(_ group: String?) -> Int {
+        group.flatMap { g in groups.firstIndex { $0.id == g } }.map { $0 + 1 } ?? 0
+    }
+
+    func mixIsMono(_ group: String?) -> Bool {
+        group.map { g in groups.first { $0.id == g }?.mix_mono ?? false } ?? mix_mono
+    }
+
+    func mixJack(_ group: String?) -> JackID {
+        JackID(side: .mixOut, unit: mixUnit(group), ch: 1, width: mixIsMono(group) ? 1 : 2)
+    }
+
+    /// "MIX", "DAW MIX".
+    func mixName(_ group: String?) -> String {
+        group.flatMap { g in groups.first { $0.id == g } }.map { $0.name.uppercased() + " MIX" } ?? "MIX"
+    }
 }
 
 extension RackModel {
@@ -336,7 +367,7 @@ extension RackModel {
         case "virtual_device": return p.channels ?? 2
         default:
             if let hw = hardware(named: p.name), hw.outputs > 0 { return hw.outputs }
-            return max(2, p.wires.map { $0[1] }.max() ?? 2)
+            return max(2, (p.wires.map { $0[1] } + p.mix_wires.map(\.to)).max() ?? 2)
         }
     }
 
@@ -355,8 +386,8 @@ extension RackModel {
     /// Units switched on with nothing patched to them. Hardware ones still
     /// run in the routing (clocked and kept in step for nothing).
     func idleUnits(_ d: EDevice) -> (inputs: [Int], outputs: [Int]) {
-        (d.inputs.indices.filter { d.inputs[$0].enabled && d.inputs[$0].wires.isEmpty },
-         d.outputs.indices.filter { d.outputs[$0].enabled && d.outputs[$0].wires.isEmpty })
+        (d.inputs.indices.filter { d.inputs[$0].enabled && !d.inputs[$0].patched },
+         d.outputs.indices.filter { d.outputs[$0].enabled && !d.outputs[$0].patched })
     }
 
     /// Switches those off.
@@ -368,48 +399,6 @@ extension RackModel {
             for i in idle.inputs { d.inputs[i].enabled = false }
             for i in idle.outputs { d.outputs[i].enabled = false }
         }
-    }
-
-    /// Which units are shown, and where.
-    func layout(_ d: EDevice) -> RackLayout {
-        let shown = { (p: EPort) in self.showUnpatched || !p.wires.isEmpty }
-        let inputs = d.inputs.indices.filter { shown(d.inputs[$0]) }
-        let outputs = d.outputs.indices.filter { shown(d.outputs[$0]) }
-        var l = RackLayout(inputs: inputs, outputs: outputs, hidden: d.inputs.count + d.outputs.count - inputs.count - outputs.count)
-        var y = Rack.topPad
-        l.rows.append((y, Rack.unitHeight))
-        y += Rack.pitch
-        // A half-width unit takes a row's left half; the next one, if half-width too, its right.
-        func place(_ units: [Int], half: (Int) -> Bool) -> [Int: Spot] {
-            var spots: [Int: Spot] = [:]
-            var open: CGFloat?
-            for i in units {
-                if half(i), let top = open {
-                    spots[i] = Spot(top: top, half: .right)
-                    open = nil
-                    continue
-                }
-                if let top = open { l.blanks.append(Spot(top: top, half: .right)) }
-                open = half(i) ? y : nil
-                spots[i] = Spot(top: y, half: half(i) ? .left : nil)
-                l.rows.append((y, Rack.unitHeight))
-                y += Rack.pitch
-            }
-            if let top = open { l.blanks.append(Spot(top: top, half: .right)) }
-            return spots
-        }
-        let inputSpots = place(inputs) { self.isHalf(input: $0, in: d) }
-        l.inputSpots = inputSpots
-        let units: [String?] = [nil] + d.groups.map { $0.id as String? }
-        for g in units {
-            l.busUnits.append((g, y))
-            l.rows.append((y, Rack.mixerHeight))
-            y += Rack.mixerHeight + 2
-        }
-        let outputSpots = place(outputs) { self.isHalf(output: $0, in: d) }
-        l.outputSpots = outputSpots
-        l.height = y + Rack.topPad + 40
-        return l
     }
 
     /// Where a jack sits on the back panel: inputs above the bus inputs,
@@ -444,8 +433,10 @@ extension RackModel {
             let s = slots.firstIndex { $0.contains(j.unit) } ?? 0
             let top = l.busUnitTop(group)
             let y = slots[s].count == 2 ? top + (slots[s][0] == j.unit ? 102 : 144) : top + 122
-            let px = j.side == .busIn ? x(Rack.busInX, 340, 100, slots.count, s) : x(Rack.busOutX, 380, 100, slots.count, s)
+            let px = j.side == .busIn ? x(Rack.busInX, 340, 100, slots.count, s) : x(Rack.busOutX, 280, 100, slots.count, s)
             return CGPoint(x: px, y: y)
+        case .mixOut:
+            return CGPoint(x: Rack.mixX, y: l.busUnitTop(d.mixGroup(j.unit)) + 122)
         }
     }
 
@@ -466,6 +457,8 @@ extension RackModel {
         for i in l.inputs { unit(.source, i, channels(ofInput: d.inputs[i], in: d), d.inputs[i].mono) }
         for i in l.outputs { unit(.output, i, channels(ofOutput: d.outputs[i]), d.outputs[i].mono) }
         for g in l.busUnits.map(\.group) {
+            let p = position(d.mixJack(g), in: d)
+            out.append((.mix(group: g), CGPoint(x: p.x + 24, y: p.y), d.mixIsMono(g)))
             for slot in d.busSlots(in: g) {
                 for side in [Side.busIn, .busOut] {
                     let p = position(d.busJack(slot[0], side), in: d)
@@ -486,6 +479,7 @@ extension RackModel {
         for k in d.bus_list.indices {
             all += [d.busJack(k, .busIn), d.busJack(k, .busOut)]
         }
+        all += l.busUnits.map { d.mixJack($0.group) }
         for i in l.outputs {
             all += spans(ofOutput: i, in: d).map { JackID(side: .output, unit: i, ch: $0.ch, width: $0.width) }
         }
@@ -537,6 +531,20 @@ extension RackModel {
                 guard let k = d.bus(ofChannel: w[0]) else { continue }
                 custom.append((d.busJack(k, .busOut), jack(own, .output, i, w[1])))
             }
+            var mixUsed = Set<EMixWire>()
+            for g in [nil] + d.groups.map({ $0.id as String? }) {
+                let m = d.mixJack(g)
+                for s in own {
+                    let ws = cableWires((m.ch, m.width), (s.ch, s.width)).map { EMixWire(group: g, from: $0[0], to: $0[1]) }
+                    if ws.allSatisfy(p.mix_wires.contains) {
+                        cables.append(Cable(from: m, to: JackID(side: .output, unit: i, ch: s.ch, width: s.width)))
+                        mixUsed.formUnion(ws)
+                    }
+                }
+            }
+            for w in p.mix_wires where !mixUsed.contains(w) {
+                custom.append((d.mixJack(w.group), jack(own, .output, i, w.to)))
+            }
         }
         return (cables, custom)
     }
@@ -545,15 +553,22 @@ extension RackModel {
     func connect(_ a: JackID, _ b: JackID) {
         let (from, to): (JackID, JackID)
         switch (a.side, b.side) {
-        case (.source, .busIn), (.busOut, .output): (from, to) = (a, b)
-        case (.busIn, .source), (.output, .busOut): (from, to) = (b, a)
+        case (.source, .busIn), (.busOut, .output), (.mixOut, .output): (from, to) = (a, b)
+        case (.busIn, .source), (.output, .busOut), (.output, .mixOut): (from, to) = (b, a)
         default:
-            warning = "Those jacks don’t connect: inputs go into bus inputs, bus outputs go to outputs."
+            warning = "Those jacks don’t connect: inputs go into bus inputs, bus outputs and MIX go to outputs."
             return
         }
         warning = nil
         let add = cableWires((from.ch, from.width), (to.ch, to.width))
-        if from.side == .source {
+        if from.side == .mixOut {
+            let g = device?.mixGroup(from.unit)
+            edit { dev in
+                for w in add.map({ EMixWire(group: g, from: $0[0], to: $0[1]) }) where !dev.outputs[to.unit].mix_wires.contains(w) {
+                    dev.outputs[to.unit].mix_wires.append(w)
+                }
+            }
+        } else if from.side == .source {
             edit { dev in for w in add where !dev.inputs[from.unit].wires.contains(w) { dev.inputs[from.unit].wires.append(w) } }
         } else {
             edit { dev in for w in add where !dev.outputs[to.unit].wires.contains(w) { dev.outputs[to.unit].wires.append(w) } }
@@ -563,7 +578,11 @@ extension RackModel {
 
     func disconnect(_ c: Cable) {
         let gone = cableWires((c.from.ch, c.from.width), (c.to.ch, c.to.width))
-        if c.from.side == .source {
+        if c.from.side == .mixOut {
+            let g = device?.mixGroup(c.from.unit)
+            let wires = gone.map { EMixWire(group: g, from: $0[0], to: $0[1]) }
+            edit { dev in dev.outputs[c.to.unit].mix_wires.removeAll { wires.contains($0) } }
+        } else if c.from.side == .source {
             edit { dev in dev.inputs[c.from.unit].wires.removeAll { gone.contains($0) } }
         } else {
             edit { dev in dev.outputs[c.to.unit].wires.removeAll { gone.contains($0) } }
@@ -600,6 +619,28 @@ extension RackModel {
                 list[k].mono = false
             }
             rebus(list)
+        case .mix(let g):
+            let mono = !d.mixIsMono(g)
+            edit { dev in
+                if let g, let i = dev.groups.firstIndex(where: { $0.id == g }) { dev.groups[i].mix_mono = mono } else if g == nil { dev.mix_mono = mono }
+                for o in dev.outputs.indices {
+                    let mine = dev.outputs[o].mix_wires.filter { $0.group == g }.sorted { $0.to < $1.to }
+                    var new: [EMixWire] = []
+                    var k = 0
+                    while k < mine.count {
+                        let w = mine[k]
+                        // Stereo into a pair: a mono MIX's cable to both sides becomes left → left, right → right.
+                        if !mono, k + 1 < mine.count, mine[k + 1].to == w.to + 1 {
+                            new += [EMixWire(group: g, from: 1, to: w.to), EMixWire(group: g, from: 2, to: w.to + 1)]
+                            k += 2
+                            continue
+                        }
+                        new.append(EMixWire(group: g, from: 1, to: w.to))
+                        k += 1
+                    }
+                    dev.outputs[o].mix_wires = dev.outputs[o].mix_wires.filter { $0.group != g } + new.uniqued()
+                }
+            }
         }
     }
 
@@ -653,7 +694,8 @@ extension RackModel {
             guard let app = inp.icon?.lowercased(), !app.isEmpty else { continue }
             let busses = Set(inp.wires.compactMap { d.bus(ofChannel: $0[1]) })
             for out in d.outputs where out.kind == "virtual_device" && out.icon?.lowercased() == app {
-                if out.wires.contains(where: { d.bus(ofChannel: $0[0]).map(busses.contains) ?? false }) {
+                let viaMix = out.mix_wires.contains { w in busses.contains { w.group == nil || d.groupOf($0) == w.group } }
+                if viaMix || out.wires.contains(where: { d.bus(ofChannel: $0[0]).map(busses.contains) ?? false }) {
                     warning = "Feedback: \(inp.name ?? "input \(i + 1)") reaches \(out.name ?? "an output") — \(inp.icon!) would record its own output."
                     return
                 }
@@ -826,17 +868,13 @@ extension RackModel {
         renaming = "group:" + g.id
     }
 
-    /// Removes a group; its busses go back to the mixer.
+    /// Removes a group; its busses go back to the mixer, and its MIX is unplugged.
     func removeGroup(_ id: String) {
         edit { dev in
             dev.groups.removeAll { $0.id == id }
             for k in dev.bus_list.indices where dev.bus_list[k].group == id { dev.bus_list[k].group = nil }
+            for o in dev.outputs.indices { dev.outputs[o].mix_wires.removeAll { $0.group == id } }
         }
-    }
-
-    func moveGroup(_ id: String, by delta: Int) {
-        guard let d = device, let at = d.groups.firstIndex(where: { $0.id == id }), d.groups.indices.contains(at + delta) else { return }
-        edit { $0.groups.swapAt(at, at + delta) }
     }
 }
 
@@ -851,15 +889,6 @@ extension Array where Element: Hashable {
 // MARK: - Adding, removing, ordering units
 
 extension RackModel {
-    func move(isInput: Bool, _ index: Int, by delta: Int) {
-        edit { d in
-            let n = isInput ? d.inputs.count : d.outputs.count
-            let to = index + delta
-            guard (0..<n).contains(to) else { return }
-            if isInput { d.inputs.swapAt(index, to) } else { d.outputs.swapAt(index, to) }
-        }
-    }
-
     func remove(isInput: Bool, _ index: Int) {
         edit { d in if isInput { d.inputs.remove(at: index) } else { d.outputs.remove(at: index) } }
         checkFeedback()
@@ -872,12 +901,12 @@ extension RackModel {
 
     /// A new unit stays in sight even when unpatched units are hidden.
     func addInput(_ p: EPort) {
-        if p.wires.isEmpty { showUnpatched = true }
+        if !p.patched { showUnpatched = true }
         edit { $0.inputs.append(p) }
     }
 
     func addOutput(_ p: EPort) {
-        if p.wires.isEmpty { showUnpatched = true }
+        if !p.patched { showUnpatched = true }
         edit { $0.outputs.append(p) }
     }
 

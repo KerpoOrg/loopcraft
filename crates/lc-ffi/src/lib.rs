@@ -9,7 +9,7 @@ use std::ffi::{c_char, c_double, c_int, CStr, CString};
 use std::path::Path;
 
 use lc_ca as ca;
-use lc_config::{Config, Device, Input, InputKind, Output, OutputKind, VirtualDevice, Wire};
+use lc_config::{Config, Device, Input, InputKind, MixWire, Output, OutputKind, RackSpot, VirtualDevice, Wire};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -35,6 +35,11 @@ pub struct EDevice {
     pub bus_list: Vec<EBus>,
     #[serde(default)]
     pub groups: Vec<EGroup>,
+    /// The mixer's MIX is one channel.
+    #[serde(default)]
+    pub mix_mono: bool,
+    #[serde(default)]
+    pub mixer_rack: Option<ERack>,
     pub virtual_inputs: u32,
     pub sample_rate: u32,
     pub buffer_frames: Option<u32>,
@@ -59,6 +64,27 @@ pub struct EBus {
 pub struct EGroup {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub mix_mono: bool,
+    #[serde(default)]
+    pub rack: Option<ERack>,
+}
+
+/// Where a unit sits in the editor's rack.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
+pub struct ERack {
+    pub u: u32,
+    #[serde(default)]
+    pub right: bool,
+}
+
+/// A MIX channel to an output channel; `group` none: the mixer's MIX.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct EMixWire {
+    #[serde(default)]
+    pub group: Option<String>,
+    pub from: u32,
+    pub to: u32,
 }
 
 /// An input or an output. `kind`: inputs "virtual" | "virtual_device" |
@@ -92,6 +118,11 @@ pub struct EPort {
     /// A half-width unit.
     #[serde(default)]
     pub half: bool,
+    #[serde(default)]
+    pub rack: Option<ERack>,
+    /// Outputs: [`EMixWire`]s.
+    #[serde(default)]
+    pub mix_wires: Vec<EMixWire>,
 }
 
 fn gain_to(db: f64) -> Option<f64> {
@@ -110,6 +141,14 @@ fn wires_from(w: &[[u32; 2]]) -> Vec<Wire> {
     w.iter().map(|[from, to]| Wire { from: *from, to: *to }).collect()
 }
 
+fn rack_to(r: &Option<RackSpot>) -> Option<ERack> {
+    r.map(|r| ERack { u: r.u, right: r.right })
+}
+
+fn rack_from(r: &Option<ERack>) -> Option<RackSpot> {
+    r.map(|r| RackSpot { u: r.u, right: r.right })
+}
+
 fn virtual_port(v: &VirtualDevice) -> (Option<String>, Option<String>, Option<u32>, Option<String>) {
     (Some(v.name.clone()), Some(v.id.clone()), Some(v.channels), v.icon.clone())
 }
@@ -123,7 +162,9 @@ pub fn to_editor(c: &Config) -> EConfig {
             id: d.id.clone(),
             busses: d.busses,
             bus_list: d.bus_list.iter().map(|b| EBus { id: b.id.clone(), name: b.name.clone(), mono: b.mono, group: b.group.clone() }).collect(),
-            groups: d.groups.iter().map(|g| EGroup { id: g.id.clone(), name: g.name.clone() }).collect(),
+            groups: d.groups.iter().map(|g| EGroup { id: g.id.clone(), name: g.name.clone(), mix_mono: g.mix_mono, rack: rack_to(&g.rack) }).collect(),
+            mix_mono: d.mix_mono,
+            mixer_rack: rack_to(&d.mixer_rack),
             virtual_inputs: d.virtual_inputs,
             sample_rate: d.sample_rate,
             buffer_frames: d.buffer_frames,
@@ -152,6 +193,8 @@ pub fn to_editor(c: &Config) -> EConfig {
                         follow_volume: false,
                         mono: i.mono.clone(),
                         half: i.half,
+                        rack: rack_to(&i.rack),
+                        mix_wires: vec![],
                     }
                 })
                 .collect(),
@@ -178,6 +221,8 @@ pub fn to_editor(c: &Config) -> EConfig {
                         follow_volume: o.follow_volume,
                         mono: o.mono.clone(),
                         half: o.half,
+                        rack: rack_to(&o.rack),
+                        mix_wires: o.mix_wires.iter().map(|w| EMixWire { group: w.group.clone(), from: w.from, to: w.to }).collect(),
                     }
                 })
                 .collect(),
@@ -230,6 +275,7 @@ pub fn from_editor(e: &EConfig) -> Result<Config, String> {
                 muted: p.muted,
                 mono: p.mono.clone(),
                 half: p.half,
+                rack: rack_from(&p.rack),
             });
         }
         let mut outputs = Vec::new();
@@ -247,12 +293,14 @@ pub fn from_editor(e: &EConfig) -> Result<Config, String> {
                 id,
                 kind,
                 wires: wires_from(&p.wires),
+                mix_wires: p.mix_wires.iter().map(|w| MixWire { group: w.group.clone(), from: w.from, to: w.to }).collect(),
                 enabled: p.enabled,
                 gain_db: gain_from(p.gain_db),
                 muted: p.muted,
                 follow_volume: p.follow_volume,
                 mono: p.mono.clone(),
                 half: p.half,
+                rack: rack_from(&p.rack),
             });
         }
         let mut bus_list: Vec<lc_config::Bus> = d
@@ -272,7 +320,13 @@ pub fn from_editor(e: &EConfig) -> Result<Config, String> {
             id: d.id.clone(),
             busses: covered,
             bus_list,
-            groups: d.groups.iter().map(|g| lc_config::BusGroup { id: g.id.clone(), name: g.name.trim().to_string() }).collect(),
+            groups: d
+                .groups
+                .iter()
+                .map(|g| lc_config::BusGroup { id: g.id.clone(), name: g.name.trim().to_string(), mix_mono: g.mix_mono, rack: rack_from(&g.rack) })
+                .collect(),
+            mix_mono: d.mix_mono,
+            mixer_rack: rack_from(&d.mixer_rack),
             virtual_inputs: d.virtual_inputs,
             sample_rate: d.sample_rate,
             buffer_frames: d.buffer_frames,
@@ -619,13 +673,15 @@ mod tests {
 
     const SETUP: &str = concat!(
         "devices:\n  - name: LoopCraft Virtual Sound\n    id: lvs\n    busses: 10\n    virtual_inputs: 2\n    buffer_frames: 32\n",
+        "    mixer_rack: 2\n    groups: [{id: gdaw, name: DAW, mix_mono: true, rack: 5}]\n",
         "    inputs:\n",
-        "      - {virtual: true, wires: {1: 1, 2: 2}}\n",
+        "      - {virtual: true, wires: {1: 1, 2: 2}, half: true, rack: 1R}\n",
         "      - {app: Spotify, wires: {left: 3, right: 4}, mute_original: true}\n",
         "      - {virtual: Comms, channels: 2, icon: Discord, wires: {1: 7, 2: 8}}\n",
         "    outputs:\n",
         "      - {device: PRO X, wires: {1: 1, 2: 2, 3: 1, 4: 2}, follow_volume: true}\n",
         "      - {virtual: Daw Send, id: daw-output, channels: 8, wires: {1: 1, 2: 2}, gain: -inf}\n",
+        "      - {device: Rane FOUR, wires: {mix.left: 1, mix.right: 2, gdaw.mix: 3}}\n",
     );
 
     #[test]

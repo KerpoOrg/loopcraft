@@ -18,6 +18,10 @@ struct EDevice: Codable, Equatable {
     var bus_list: [EBus]
     /// Bus groups, each shown as a unit of its own.
     var groups: [EGroup]
+    /// The mixer's MIX (every bus summed) is one channel.
+    var mix_mono: Bool = false
+    /// Where the mixer sits in the rack; nil: placed with the others.
+    var mixer_rack: ERack? = nil
     var virtual_inputs: UInt32
     var sample_rate: UInt32
     var buffer_frames: UInt32?
@@ -41,6 +45,24 @@ struct EBus: Codable, Equatable {
 struct EGroup: Codable, Equatable {
     var id: String
     var name: String
+    /// Its MIX (the group's busses summed) is one channel.
+    var mix_mono: Bool = false
+    var rack: ERack? = nil
+}
+
+/// Where a unit sits: its rack unit (1 = the first below the preset unit)
+/// and, for a half-width unit, the right half.
+struct ERack: Codable, Equatable, Hashable {
+    var u: UInt32
+    var right: Bool = false
+}
+
+/// A MIX channel (1, or 2: the right of a stereo MIX) to an output channel;
+/// `group` nil: the mixer's MIX.
+struct EMixWire: Codable, Equatable, Hashable {
+    var group: String?
+    var from: UInt32
+    var to: UInt32
 }
 
 struct EPort: Codable, Equatable {
@@ -62,6 +84,12 @@ struct EPort: Codable, Equatable {
     var mono: [UInt32] = []
     /// A half-width unit (stereo and mono units only).
     var half: Bool = false
+    var rack: ERack? = nil
+    /// Outputs: what they take from a MIX.
+    var mix_wires: [EMixWire] = []
+
+    /// Anything patched to it.
+    var patched: Bool { !wires.isEmpty || !mix_wires.isEmpty }
 }
 
 struct HardwareDevice: Codable, Equatable {

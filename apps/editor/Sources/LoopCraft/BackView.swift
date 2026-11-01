@@ -111,7 +111,7 @@ struct BackView: View {
 
     func canConnect(_ a: JackID, _ b: JackID) -> Bool {
         switch (a.side, b.side) {
-        case (.source, .busIn), (.busIn, .source), (.busOut, .output), (.output, .busOut): return true
+        case (.source, .busIn), (.busIn, .source), (.busOut, .output), (.output, .busOut), (.mixOut, .output), (.output, .mixOut): return true
         default: return false
         }
     }
@@ -122,6 +122,7 @@ struct BackView: View {
 
     func color(of c: Cable) -> Color {
         if c.from.side == .source { return Color(hex: Library.palette[c.from.unit % Library.palette.count]) }
+        if c.from.side == .mixOut { return Color(hex: 0x62a8ff) }
         // Bus → output: the colour of the first input on that bus, else grey.
         if let i = model.busSources(c.from.unit, in: device).first { return Color(hex: Library.palette[i % Library.palette.count]) }
         return Color(hex: 0x9aa3ad)
@@ -131,6 +132,7 @@ struct BackView: View {
     func stacked(_ j: JackID) -> Bool {
         switch j.side {
         case .busIn, .busOut: return device.busSlots(in: device.groupOf(j.unit)).first { $0.contains(j.unit) }?.count == 2
+        case .mixOut: return false
         case .source: return j.width == 1 && model.channels(ofInput: device.inputs[j.unit], in: device) > 1 && !(j.ch % 2 == 1 && j.ch == model.channels(ofInput: device.inputs[j.unit], in: device))
         case .output: return j.width == 1 && model.channels(ofOutput: device.outputs[j.unit]) > 1 && !(j.ch % 2 == 1 && j.ch == model.channels(ofOutput: device.outputs[j.unit]))
         }
@@ -152,6 +154,8 @@ struct BackView: View {
             return ch == 1 ? "MONO" : ch == 2 && j.width == 2 ? "L/R" : ch == 2 ? (j.ch == 1 ? "L" : "R") : numbers
         case .busIn, .busOut:
             return model.busName(j.unit, in: device) ?? numbers
+        case .mixOut:
+            return j.width == 2 ? "MIX L/R" : "MIX"
         }
     }
 
@@ -161,6 +165,10 @@ struct BackView: View {
         case .source: return model.spanNote(device.inputs[j.unit], input: true, ch: j.ch, width: j.width).map { numbers + "\n" + $0 } ?? numbers
         case .output: return model.spanNote(device.outputs[j.unit], input: false, ch: j.ch, width: j.width).map { numbers + "\n" + $0 } ?? numbers
         case .busIn, .busOut: return "\(model.busLabel(j.unit, in: device)): " + (j.width == 2 ? "stereo, channels \(j.ch)/\(j.ch + 1)" : "mono, channel \(j.ch)")
+        case .mixOut:
+            let g = device.mixGroup(j.unit)
+            let what = g == nil ? "every bus" : "the busses in \(device.groups.first { $0.id == g }?.name ?? "the group")"
+            return "\(device.mixName(g)): \(what) summed, " + (j.width == 2 ? "stereo (mono busses at -3 dB on both sides)" : "mono")
         }
     }
 }
@@ -303,6 +311,7 @@ struct MixerBack: View {
                 .padding(.top, 16)
                 Silk(text: "Bus inputs").offset(x: Rack.busInX - Rack.unitX - 40 - 12, y: 76)
                 Silk(text: "Bus outputs").offset(x: Rack.busOutX - Rack.unitX - 40 - 12, y: 76)
+                Silk(text: "Mix").offset(x: Rack.mixX - Rack.unitX - 40 - 12, y: 76)
                 Text("Drag between jacks to patch · click a cable to unplug")
                     .font(.system(size: 10).width(.condensed)).foregroundStyle(Theme.dim)
                     .offset(x: 0, y: 60)

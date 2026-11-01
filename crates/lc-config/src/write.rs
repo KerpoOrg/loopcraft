@@ -7,7 +7,7 @@
 use std::fmt::Write;
 
 use crate::raw::shorthand_channels;
-use crate::{Config, Device, Input, InputKind, Output, OutputKind};
+use crate::{Config, Device, Input, InputKind, MixWire, Output, OutputKind, RackSpot};
 
 const HEADER: &str = "\
 # LoopCraft configuration, written by the LoopCraft editor. Hand edits are
@@ -38,6 +38,33 @@ fn bus_side(d: &Device, c: u32) -> String {
         Some(k) if d.bus_list[k].mono => d.bus_list[k].id.clone(),
         Some(k) => format!("{}.{}", d.bus_list[k].id, if c == d.bus_channels(k).0 { "left" } else { "right" }),
         None => c.to_string(),
+    }
+}
+
+/// How wires name a MIX channel: `mix.left`, `mix` when mono, `<group id>.mix.left`.
+fn mix_side(d: &Device, w: &MixWire) -> String {
+    let head = w.group.as_ref().map_or("mix".to_string(), |g| format!("{g}.mix"));
+    match (d.mix_is_mono(w.group.as_deref()), w.from) {
+        (true, _) => head,
+        (false, 2) => format!("{head}.right"),
+        (false, _) => format!("{head}.left"),
+    }
+}
+
+/// A MIX for people: "MIX", "DAW MIX".
+fn mix_label(d: &Device, group: Option<&str>) -> String {
+    match group.and_then(|g| d.groups.iter().find(|x| x.id == g)) {
+        Some(g) => format!("{} MIX", g.name),
+        None => "MIX".to_string(),
+    }
+}
+
+/// `rack: 5`, `rack: 5R`.
+fn spot(s: &RackSpot, half: bool) -> String {
+    match (half, s.right) {
+        (true, true) => format!("{}R", s.u),
+        (true, false) => format!("{}L", s.u),
+        _ => s.u.to_string(),
     }
 }
 
@@ -136,29 +163,36 @@ fn input_wires(out: &mut String, d: &Device, i: &Input) {
 /// two channels, else `wires: {"<bus>.left": 1, …}`.
 fn output_wires(out: &mut String, d: &Device, o: &Output) {
     let ks = busses_of(d, o.wires.iter().map(|w| w.from));
-    let names: Vec<String> = ks.iter().map(|&k| bus_label(d, k)).collect();
+    let mut names: Vec<String> = ks.iter().map(|&k| bus_label(d, k)).collect();
+    let mut mixes: Vec<Option<&str>> = o.mix_wires.iter().map(|w| w.group.as_deref()).collect();
+    mixes.dedup();
+    names.extend(mixes.iter().map(|g| mix_label(d, *g)));
     let comment = if names.is_empty() { String::new() } else { format!("   # {} →", names.join(", ")) };
     let mut have: Vec<(u32, u32)> = o.wires.iter().map(|w| (w.from, w.to)).collect();
     have.sort_unstable();
     have.dedup();
     let channels = shorthand_channels(None, Some(&o.kind), d.virtual_inputs);
-    if !ks.is_empty() && have == stereo(d, &ks, channels, false) {
+    if o.mix_wires.is_empty() && !ks.is_empty() && have == stereo(d, &ks, channels, false) {
         let ids: Vec<String> = ks.iter().map(|&k| quote(&d.bus_list[k].id)).collect();
         let _ = writeln!(out, "        from: {}{comment}", list(&ids));
         return;
     }
-    let mut entries: Vec<(u32, Vec<String>)> = Vec::new();
-    for w in &o.wires {
-        match entries.iter_mut().find(|(f, _)| *f == w.from) {
-            Some((_, ts)) => ts.push(w.to.to_string()),
-            None => entries.push((w.from, vec![w.to.to_string()])),
+    let mut entries: Vec<(String, Vec<String>)> = Vec::new();
+    let sides = o.wires.iter().map(|w| (bus_side(d, w.from), w.to)).chain(o.mix_wires.iter().map(|w| (mix_side(d, w), w.to)));
+    for (f, to) in sides {
+        match entries.iter_mut().find(|(g, _)| *g == f) {
+            Some((_, ts)) => ts.push(to.to_string()),
+            None => entries.push((f, vec![to.to_string()])),
         }
     }
-    let parts: Vec<String> = entries.iter().map(|(f, ts)| format!("{}: {}", quote(&bus_side(d, *f)), list(ts))).collect();
+    let parts: Vec<String> = entries.iter().map(|(f, ts)| format!("{}: {}", quote(f), list(ts))).collect();
     let _ = writeln!(out, "        wires: {{{}}}{comment}", parts.join(", "));
 }
 
-fn common(out: &mut String, enabled: bool, gain_db: f64, muted: bool, mono: &[u32], half: bool) {
+fn common(out: &mut String, enabled: bool, gain_db: f64, muted: bool, mono: &[u32], half: bool, rack: Option<&RackSpot>) {
+    if let Some(r) = rack {
+        let _ = writeln!(out, "        rack: {}", spot(r, half));
+    }
     if !mono.is_empty() {
         let list: Vec<String> = mono.iter().map(u32::to_string).collect();
         let _ = writeln!(out, "        mono: [{}]", list.join(", "));
@@ -213,7 +247,7 @@ fn input(out: &mut String, d: &Device, i: &Input) {
     } else {
         input_wires(out, d, i);
     }
-    common(out, i.enabled, i.gain_db, i.muted, &i.mono, i.half);
+    common(out, i.enabled, i.gain_db, i.muted, &i.mono, i.half, i.rack.as_ref());
 }
 
 fn output(out: &mut String, d: &Device, o: &Output) {
@@ -224,12 +258,12 @@ fn output(out: &mut String, d: &Device, o: &Output) {
         }
         OutputKind::Virtual(v) => virtual_lines(out, v),
     }
-    if o.wires.is_empty() {
+    if o.wires.is_empty() && o.mix_wires.is_empty() {
         out.push_str("        wires: {}\n");
     } else {
         output_wires(out, d, o);
     }
-    common(out, o.enabled, o.gain_db, o.muted, &o.mono, o.half);
+    common(out, o.enabled, o.gain_db, o.muted, &o.mono, o.half, o.rack.as_ref());
     if o.follow_volume {
         let _ = writeln!(out, "        follow_volume: true");
     }
@@ -249,8 +283,21 @@ pub fn to_yaml(config: &Config) -> String {
         if !d.groups.is_empty() {
             out.push_str("    groups:                # bus groups, each a unit of its own in the editor\n");
             for g in &d.groups {
-                let _ = writeln!(out, "      - {{id: {}, name: {}}}", quote(&g.id), quote(&g.name));
+                let mut fields = vec![format!("id: {}", quote(&g.id)), format!("name: {}", quote(&g.name))];
+                if g.mix_mono {
+                    fields.push("mix_mono: true".into());
+                }
+                if let Some(r) = &g.rack {
+                    fields.push(format!("rack: {}", spot(r, false)));
+                }
+                let _ = writeln!(out, "      - {{{}}}", fields.join(", "));
             }
+        }
+        if d.mix_mono {
+            out.push_str("    mix_mono: true         # the mixer's MIX is one channel\n");
+        }
+        if let Some(r) = &d.mixer_rack {
+            let _ = writeln!(out, "    mixer_rack: {}", spot(r, false));
         }
         out.push_str("    busses:                # stereo unless mono; wires name them by id\n");
         for (k, b) in d.bus_list.iter().enumerate() {
@@ -308,6 +355,16 @@ mod tests {
             ),
             "devices: []\n",
             "devices:\n  - name: Named\n    id: named\n    busses: [Program, \"Music \\\"Mix\\\"\", DJ]\n    inputs: [{app: Spotify, wires: {left: 3, right: 4}}]\n",
+            concat!(
+                "devices:\n  - name: Mixes\n    id: mixes\n    mixer_rack: 3\n",
+                "    groups: [{id: gdaw, name: DAW, mix_mono: true, rack: 5}]\n",
+                "    busses: [Program, {name: Synth, group: DAW}]\n",
+                "    inputs: [{device: Mic, wires: {1: 1}, half: true, rack: 1R}, {device: Line, wires: {}, rack: 2}]\n",
+                "    outputs:\n",
+                "      - {device: Rane FOUR, wires: {mix.left: 1, mix.right: 2, DAW.mix: [3, 4]}, half: true, rack: 7L}\n",
+                "      - {device: Speakers, wires: {Program.left: 1, Program.right: 2, mix.left: 1}}\n",
+                "      - {device: Mono, wires: {mix.left: 1, mix.right: 1}}\n",
+            ),
         ] {
             let config = parse(text).unwrap();
             let yaml = to_yaml(&config);

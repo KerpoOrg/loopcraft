@@ -2,6 +2,7 @@
 // one unit per output. Knobs and buttons edit the config; meters stay dark
 // until the daemon reports levels.
 
+import AppKit
 import SwiftUI
 
 /// The rack's frame: a rail under each side's ears, with a hole behind every
@@ -100,30 +101,92 @@ extension Spot {
 struct FrontView: View {
     @EnvironmentObject var model: RackModel
     var device: EDevice
+    /// A unit being carried by its ears, and how far.
+    @State private var carried: UnitRef?
+    @State private var carry: CGSize = .zero
 
     var body: some View {
         let l = model.layout(device)
         ZStack(alignment: .topLeading) {
             RackFrame(layout: l)
             PresetUnit(hidden: l.hidden).offset(x: Rack.unitX, y: l.presetTop)
-            ForEach(l.inputs, id: \.self) { i in
-                let spot = l.inputSpots[i] ?? Spot(top: 0)
-                InputUnit(index: i, port: device.inputs[i], device: device, half: spot.half)
-                    .offset(x: spot.x, y: spot.top)
-            }
-            ForEach(Array(l.busUnits.enumerated()), id: \.offset) { _, u in
-                BusUnit(group: u.group, device: device).offset(x: Rack.unitX, y: u.top)
-            }
-            ForEach(l.outputs, id: \.self) { i in
-                let spot = l.outputSpots[i] ?? Spot(top: 0)
-                OutputUnit(index: i, port: device.outputs[i], device: device, half: spot.half)
-                    .offset(x: spot.x, y: spot.top)
-            }
             ForEach(Array(l.blanks.enumerated()), id: \.offset) { _, b in
                 BlankPlate(half: b.half ?? .right).offset(x: b.x, y: b.top)
             }
+            if let r = carried, let p = l.spots[r] {
+                let to = drop(p, carry)
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(Color(hex: 0x62a8ff), style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color(hex: 0x62a8ff).opacity(0.08)))
+                    .frame(width: to.half == nil ? Rack.unitWidth : Rack.halfWidth, height: Rack.height(to.size))
+                    .offset(x: Spot(top: 0, half: to.half).x, y: to.top)
+            }
+            ForEach(l.inputs, id: \.self) { i in
+                let spot = l.inputSpots[i] ?? Spot(top: 0)
+                carrying(.input(i), l) {
+                    InputUnit(index: i, port: device.inputs[i], device: device, half: spot.half)
+                }
+                .offset(x: spot.x, y: spot.top)
+            }
+            ForEach(Array(l.busUnits.enumerated()), id: \.offset) { _, u in
+                carrying(u.group.map(UnitRef.group) ?? .mixer, l) {
+                    BusUnit(group: u.group, device: device)
+                }
+                .offset(x: Rack.unitX, y: u.top)
+            }
+            ForEach(l.outputs, id: \.self) { i in
+                let spot = l.outputSpots[i] ?? Spot(top: 0)
+                carrying(.output(i), l) {
+                    OutputUnit(index: i, port: device.outputs[i], device: device, half: spot.half)
+                }
+                .offset(x: spot.x, y: spot.top)
+            }
         }
         .frame(width: Rack.width, height: l.height, alignment: .topLeading)
+        .coordinateSpace(name: "front")
+    }
+
+    /// Where a unit lands, carried this far: the nearest rack unit, and for
+    /// a half-width unit the half its middle is over.
+    func drop(_ p: Placed, _ by: CGSize) -> Placed {
+        var to = p
+        to.u = max(1, p.u + Int((by.height / Rack.pitch).rounded()))
+        if let h = p.half {
+            let mid = Spot(top: 0, half: h).x + Rack.halfWidth / 2 + by.width
+            to.half = mid > Rack.unitX + Rack.halfWidth ? .right : .left
+        }
+        return to
+    }
+
+    /// A unit with handles on its ears: drag one to move the unit to another rack unit.
+    func carrying<Content: View>(_ r: UnitRef, _ l: RackLayout, @ViewBuilder _ unit: () -> Content) -> some View {
+        let p = l.spots[r] ?? Placed(u: 1, size: 1, half: nil)
+        let width = p.half == nil ? Rack.unitWidth : Rack.halfWidth
+        let ear = { (x: CGFloat) in
+            Rectangle().fill(Color.clear).contentShape(Rectangle())
+                .frame(width: Rack.earWidth + 6, height: Rack.height(p.size))
+                .offset(x: x)
+                .onHover { inside in if inside { NSCursor.openHand.push() } else { NSCursor.pop() } }
+                .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .named("front"))
+                    .onChanged { v in
+                        carried = r
+                        carry = v.translation
+                    }
+                    .onEnded { v in
+                        model.place(r, at: drop(p, v.translation))
+                        carried = nil
+                        carry = .zero
+                    })
+                .help("Drag by the ears to move it in the rack")
+        }
+        return ZStack(alignment: .topLeading) {
+            unit()
+            if p.half != .right { ear(0) }
+            if p.half != .left { ear(width - Rack.earWidth - 6) }
+        }
+        .offset(carried == r ? carry : .zero)
+        .shadow(color: .black.opacity(carried == r ? 0.6 : 0), radius: 12, y: 6)
+        .zIndex(carried == r ? 1 : 0)
     }
 }
 
@@ -132,14 +195,22 @@ struct FrontView: View {
 /// "MAIN → BUS 9/10" for a device input, "BUS 3/4 → SAMPLER" for a device
 /// output: the device side by what it carries, when its profile says.
 @MainActor func deviceRoute(_ model: RackModel, _ p: EPort, input: Bool, spans: [(ch: UInt32, width: UInt32)], in d: EDevice) -> String? {
-    guard !p.wires.isEmpty else { return nil }
-    let wired = Set(p.wires.map { input ? $0[0] : $0[1] })
+    guard p.patched else { return nil }
+    let wired = Set(p.wires.map { input ? $0[0] : $0[1] } + p.mix_wires.map(\.to))
     let used = spans.filter { s in (s.ch..<s.ch + s.width).contains { wired.contains($0) } }
     let names = used.compactMap { model.spanName(p, input: input, ch: $0.ch, width: $0.width) }
     guard names.count == used.count else { return nil }
     let side = names.prefix(2).joined(separator: ", ").uppercased() + (names.count > 2 ? " +\(names.count - 2)" : "")
-    let bus = busList(p.wires.map { input ? $0[1] : $0[0] }, in: d, shown: 2)
+    let mixes = mixNames(p, in: d)
+    let bus = (mixes + (p.wires.isEmpty ? [] : [busList(p.wires.map { input ? $0[1] : $0[0] }, in: d, shown: mixes.isEmpty ? 2 : 1)])).joined(separator: ", ")
     return input ? "\(side) → \(bus)" : "\(bus) → \(side)"
+}
+
+/// The MIXes an output takes: "MIX", "DAW MIX".
+func mixNames(_ p: EPort, in d: EDevice) -> [String] {
+    var groups: [String?] = []
+    for w in p.mix_wires where !groups.contains(w.group) { groups.append(w.group) }
+    return groups.map(d.mixName)
 }
 
 /// "BUS 1/2 3/4", or the busses' names where they have them: "MUSIC, 5/6".
@@ -154,8 +225,10 @@ func busList(_ chans: [UInt32], in d: EDevice, shown: Int) -> String {
     return "BUS " + ks.prefix(shown).map(place).joined(separator: " ") + more
 }
 
-func busRoute(_ chans: [UInt32], arrow: String, in d: EDevice) -> String {
-    chans.isEmpty ? "NOT PATCHED" : "\(arrow) " + busList(chans, in: d, shown: d.bus_list.contains { !$0.name.isEmpty } ? 2 : 3)
+func busRoute(_ chans: [UInt32], arrow: String, in d: EDevice, mixes: [String] = []) -> String {
+    if chans.isEmpty && mixes.isEmpty { return "NOT PATCHED" }
+    let shown = max(1, (d.bus_list.contains { !$0.name.isEmpty } ? 2 : 3) - mixes.count)
+    return "\(arrow) " + (mixes + (chans.isEmpty ? [] : [busList(chans, in: d, shown: shown)])).joined(separator: ", ")
 }
 
 /// The route display, or why the route isn't running: a device at another
@@ -426,7 +499,7 @@ struct OutputUnit: View {
 
     var body: some View {
         let spans = model.spans(ofOutput: index, in: device)
-        let route = deviceRoute(model, port, input: false, spans: spans, in: device) ?? busRoute(port.wires.map { $0[0] }, arrow: "←", in: device)
+        let route = deviceRoute(model, port, input: false, spans: spans, in: device) ?? busRoute(port.wires.map { $0[0] }, arrow: "←", in: device, mixes: mixNames(port, in: device))
         let rename = port.kind == "virtual_device" ? "out:\(index)" : nil
         // Same columns as the inputs: the gain, the level after it, what feeds it.
         Unit(half: half, dark: true) {
@@ -540,14 +613,17 @@ struct UnitMenu: View {
         }
         if canHalve || port.half {
             Button(port.half ? "Full Width" : "Half Width") {
-                model.edit { d in if isInput { d.inputs[index].half.toggle() } else { d.outputs[index].half.toggle() } }
+                model.edit { d in
+                    // A full-width unit takes the whole rack unit, not a half of it.
+                    if isInput { d.inputs[index].half.toggle(); d.inputs[index].rack?.right = false } else { d.outputs[index].half.toggle(); d.outputs[index].rack?.right = false }
+                }
             }
         }
-        Button("Move Up") { model.move(isInput: isInput, index, by: -1) }
-        Button("Move Down") { model.move(isInput: isInput, index, by: 1) }
+        Button("Move Up") { model.nudge(isInput ? .input(index) : .output(index), by: -1) }
+        Button("Move Down") { model.nudge(isInput ? .input(index) : .output(index), by: 1) }
         Divider()
         Button("Unplug All") {
-            model.edit { d in if isInput { d.inputs[index].wires = [] } else { d.outputs[index].wires = [] } }
+            model.edit { d in if isInput { d.inputs[index].wires = [] } else { d.outputs[index].wires = []; d.outputs[index].mix_wires = [] } }
         }
         if port.kind == "device" {
             Divider()
@@ -584,7 +660,7 @@ struct BusUnit: View {
                     ForEach(busses, id: \.self) { k in BusStrip(bus: k, device: device) }
                     if busses.isEmpty {
                         Text(group == nil ? "Every bus is in a group." : "No busses yet: right-click to add one.")
-                            .font(.system(size: 11)).foregroundStyle(Theme.dim).padding(.top, 70)
+                            .font(.system(size: 11)).foregroundStyle(Theme.dim).padding(.top, 55)
                     }
                 }
                 .padding(.top, 12)
@@ -595,11 +671,12 @@ struct BusUnit: View {
         .contextMenu {
             Button(info == nil ? "Add Bus" : "Add Bus to \(info!.name)") { model.addBus(to: group) }
             Button("Add Bus Group") { model.addGroup() }
+            Divider()
+            Button(info == nil ? "Move Mixer Up" : "Move Group Up") { model.nudge(group.map(UnitRef.group) ?? .mixer, by: -1) }
+            Button(info == nil ? "Move Mixer Down" : "Move Group Down") { model.nudge(group.map(UnitRef.group) ?? .mixer, by: 1) }
             if let g = info {
                 Divider()
                 Button("Rename Group…") { model.renaming = "group:" + g.id }
-                Button("Move Group Up") { model.moveGroup(g.id, by: -1) }
-                Button("Move Group Down") { model.moveGroup(g.id, by: 1) }
                 Divider()
                 Button("Remove Group (busses go to the mixer)", role: .destructive) { model.removeGroup(g.id) }
             }
@@ -688,7 +765,7 @@ struct BusStrip: View {
             }
             Spacer(minLength: 8)
         }
-        .frame(width: mono ? 40 : 56, height: 158)
+        .frame(width: mono ? 40 : 56, height: 128)
         .padding(.vertical, 8)
         .contentShape(Rectangle())
         .help(routing)

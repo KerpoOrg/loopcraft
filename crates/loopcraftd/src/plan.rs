@@ -46,6 +46,23 @@ enum Origin {
     Tap(usize),
 }
 
+fn same(a: Origin, b: Origin) -> bool {
+    match (a, b) {
+        (Origin::Member(x), Origin::Member(y)) | (Origin::Tap(x), Origin::Tap(y)) => x == y,
+        _ => false,
+    }
+}
+
+/// An output's wires as (bus channel, output channel, gain): its own, and
+/// a MIX's as every bus channel the MIX sums.
+fn output_wires(device: &lc_config::Device, o: &lc_config::Output) -> Vec<(u32, u32, f32)> {
+    let mut out: Vec<(u32, u32, f32)> = o.wires.iter().map(|w| (w.from, w.to, 1.0)).collect();
+    for w in &o.mix_wires {
+        out.extend(device.mix_sources(w.group.as_deref(), w.from).into_iter().map(|(bus, gain)| (bus, w.to, gain as f32)));
+    }
+    out
+}
+
 /// Channels of a tap's stream (a stereo mixdown).
 const TAP_CHANNELS: usize = 2;
 
@@ -259,8 +276,8 @@ pub fn layout(
                 }
                 let j = virtual_device_index(device, &v.id, true);
                 let g = if m.muted { 0.0 } else { gain(m.gain_db) };
-                for w in &m.wires {
-                    monitors.push((Origin::Member(0), 1 + j, w.to as usize - 1, w.from as usize - 1, g, m.follow_volume && caps.follow_volume));
+                for (from, to, scale) in output_wires(device, m) {
+                    monitors.push((Origin::Member(0), 1 + j, to as usize - 1, from as usize - 1, g * scale, m.follow_volume && caps.follow_volume));
                 }
                 meter_out[i] = (0..v.channels as usize).map(|c| (Origin::Member(0), 1 + j, c)).collect();
                 continue;
@@ -272,11 +289,16 @@ pub fn layout(
             .filter_map(|n| locate(&members[member].outputs, n).map(|(stream, c)| (Origin::Member(member), stream, c)))
             .collect();
         let g = if m.muted { 0.0 } else { gain(m.gain_db) };
-        for w in &m.wires {
-            match locate(&members[member].outputs, w.to) {
-                Some((stream, ch)) => monitors.push((Origin::Member(member), stream, ch, w.from as usize - 1, g, m.follow_volume && caps.follow_volume)),
-                None => warnings.push(format!("{at}: '{}' has no output channel {}; wire skipped", members[member].name, w.to)),
+        let mut missing = Vec::new();
+        for (from, to, scale) in output_wires(device, m) {
+            match locate(&members[member].outputs, to) {
+                Some((stream, ch)) => monitors.push((Origin::Member(member), stream, ch, from as usize - 1, g * scale, m.follow_volume && caps.follow_volume)),
+                None if !missing.contains(&to) => missing.push(to),
+                None => {}
             }
+        }
+        for to in missing {
+            warnings.push(format!("{at}: '{}' has no output channel {to}; wire skipped", members[member].name));
         }
     }
 
@@ -296,6 +318,15 @@ pub fn layout(
         Origin::Member(m) => base[m] + stream,
         Origin::Tap(t) => tap_base + t,
     };
+    // A bus reaching the same channel twice (wired, and in a MIX) is one route.
+    let mut merged: Vec<(Origin, usize, usize, usize, f32, bool)> = Vec::with_capacity(monitors.len());
+    for m in monitors {
+        match merged.iter_mut().find(|o| same(o.0, m.0) && (o.1, o.2, o.3, o.5) == (m.1, m.2, m.3, m.5)) {
+            Some(o) => o.4 += m.4,
+            None => merged.push(m),
+        }
+    }
+    let monitors = merged;
     // Silent (muted, -inf) routes stay in the plan at gain 0: muting and
     // unmuting change only a gain, which the mix fades, never the routing.
     let to_routes = |list: &[(Origin, usize, usize, usize, f32, bool)], base: &[usize]| -> Vec<Route> {
@@ -562,6 +593,23 @@ mod tests {
         assert!(layout(&d, &stale, &present(), &apps, &Caps { slots: &[], follow_volume: true, virtuals: true }).is_err());
         assert!(wants_engine(&d));
         assert!(!wants_engine(&device("")));
+    }
+
+    #[test]
+    fn a_mix_sums_every_bus() {
+        let d = device("    outputs:\n      - {device: Rane FOUR, wires: {mix.left: 1, mix.right: 2, 1: 1}, gain: -6}\n");
+        let l = layout(&d, &twin(), &present(), &apps, &Caps { slots: &[], follow_volume: true, virtuals: true }).unwrap();
+        let g = gain(-6.0);
+        // Bus 1 is wired and in the MIX: one route at twice the gain.
+        let mut want = vec![r(1, 0, 0, 2.0 * g)];
+        want.extend([2, 4, 6, 8].map(|c| r(1, 0, c, g)));
+        want.extend([1, 3, 5, 7, 9].map(|c| r(1, 1, c, g)));
+        assert_eq!(l.plan.monitors, want);
+        assert!(l.warnings.is_empty(), "{:?}", l.warnings);
+
+        let d = device("    mix_mono: true\n    outputs:\n      - {device: Rane FOUR, wires: {mix: 3}}\n");
+        let l = layout(&d, &twin(), &present(), &apps, &Caps { slots: &[], follow_volume: true, virtuals: true }).unwrap();
+        assert_eq!(l.plan.monitors, (0..10).map(|c| r(1, 2, c, 0.5)).collect::<Vec<_>>());
     }
 
     #[test]

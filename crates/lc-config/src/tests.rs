@@ -418,3 +418,57 @@ fn renaming_or_reordering_busses_keeps_the_patch() {
     let back = parse(&to_yaml(&s)).unwrap();
     assert_eq!(back, s);
 }
+
+#[test]
+fn mix_wires_name_the_mixer_or_a_group() {
+    let c = parse(concat!(
+        "devices:\n  - name: M\n    id: m\n",
+        "    groups: [{id: gdaw, name: DAW, mix_mono: true}]\n",
+        "    busses: [Program, {name: Mic, mono: true}, {name: Synth, group: DAW}]\n",
+        "    outputs:\n",
+        "      - {device: Rane FOUR, wires: {mix.left: 1, mix.right: 2, DAW.mix: [3, 4], Program.left: 5}}\n",
+    ))
+    .unwrap();
+    let d = &c.devices[0];
+    let o = &d.outputs[0];
+    assert_eq!(o.wires, vec![w(1, 5)]);
+    let mw = |group: Option<&str>, from, to| MixWire { group: group.map(String::from), from, to };
+    assert_eq!(o.mix_wires, vec![mw(None, 1, 1), mw(None, 2, 2), mw(Some("gdaw"), 1, 3), mw(Some("gdaw"), 1, 4)]);
+    // Stereo: each stereo bus on its side, the mono mic on both at -3 dB.
+    let half = std::f64::consts::FRAC_1_SQRT_2;
+    assert_eq!(d.mix_sources(None, 1), vec![(1, 1.0), (3, half), (4, 1.0)]);
+    assert_eq!(d.mix_sources(None, 2), vec![(2, 1.0), (3, half), (5, 1.0)]);
+    // A mono MIX of the group: both sides of Synth at -6 dB.
+    assert_eq!(d.mix_sources(Some("gdaw"), 1), vec![(4, 0.5), (5, 0.5)]);
+}
+
+#[test]
+fn mix_wires_match_the_mix_mode() {
+    let p = invalid(concat!(
+        "devices:\n  - name: M\n    id: m\n    mix_mono: true\n",
+        "    groups: [{id: gdaw, name: DAW}]\n    busses: [{name: Synth, group: DAW}]\n",
+        "    outputs:\n      - {device: X, wires: {mix.left: 1, DAW.mix: 2, Nope.mix.left: 3}}\n",
+    ));
+    assert!(p.iter().any(|p| p.contains("'mix.left': the mixer's MIX is mono; wire from 'mix' itself")), "{p:?}");
+    assert!(p.iter().any(|p| p.contains("'DAW.mix': the MIX of 'DAW' is stereo")), "{p:?}");
+    assert!(p.iter().any(|p| p.contains("there is no bus group 'Nope'")), "{p:?}");
+    let p = invalid("devices:\n  - {name: M, id: m, busses: [Mix]}\n");
+    assert!(p.iter().any(|p| p.contains("'mix' is what wires call the mixer's MIX")), "{p:?}");
+}
+
+#[test]
+fn rack_spots() {
+    let c = parse(concat!(
+        "devices:\n  - name: M\n    id: m\n    mixer_rack: 4\n    groups: [{name: DAW, rack: 9}]\n",
+        "    inputs: [{device: Mic, wires: {}, half: true, rack: 2R}, {device: Line, wires: {}, rack: 1}]\n",
+    ))
+    .unwrap();
+    let d = &c.devices[0];
+    assert_eq!(d.mixer_rack, Some(RackSpot { u: 4, right: false }));
+    assert_eq!(d.groups[0].rack, Some(RackSpot { u: 9, right: false }));
+    assert_eq!(d.inputs[0].rack, Some(RackSpot { u: 2, right: true }));
+    assert_eq!(d.inputs[1].rack, Some(RackSpot { u: 1, right: false }));
+    let p = invalid("devices:\n  - name: M\n    id: m\n    mixer_rack: 0\n    inputs: [{device: Line, wires: {}, rack: 3R}]\n");
+    assert!(p.iter().any(|p| p.contains("mixer_rack: rack: '0' is not a rack unit")), "{p:?}");
+    assert!(p.iter().any(|p| p.contains("rack: '3R' names a half, but the unit is full width")), "{p:?}");
+}

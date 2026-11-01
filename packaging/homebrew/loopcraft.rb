@@ -4,7 +4,7 @@
 class Loopcraft < Formula
   desc "Offline virtual audio router and mixer"
   homepage "https://github.com/KerpoOrg/loopcraft"
-  url "https://github.com/KerpoOrg/loopcraft/archive/refs/tags/v0.4.1.tar.gz"
+  url "https://github.com/KerpoOrg/loopcraft/archive/refs/tags/v0.5.0.tar.gz"
   sha256 "@SHA256@"
   license "GPL-3.0-or-later"
   head "https://github.com/KerpoOrg/loopcraft.git", branch: "main"
